@@ -16,13 +16,80 @@
 #include <netinet/ether.h>
 #include <arpa/inet.h>
 
+#define DEBUG 1
+
 pcap_t *pcap_handle;
 char errbuf[PCAP_ERRBUF_SIZE];
 
-pcap_t* open_pcap_socket(char *device){
+
+char* filter(int port, int tcp, int udp, int arp, int icmp4, int icmp6, int igmp, int mld) {
+    char *filter = (char*) malloc(100); // allocate 100 bytes of memory
+    strcpy(filter, "");
+
+    if (port != 0){
+        char tmp[50] = "";
+        if(tcp)
+        {
+            sprintf(tmp, "tcp %d ", port);
+            strcat(filter, tmp);
+        }
+        if(udp)
+        {
+            memset(tmp, 0, sizeof(tmp));
+            sprintf(tmp, "udp %d ", port);
+            strcat(filter, tmp);
+        }
+        if(arp)
+            strcat(filter, "arp or ");
+        if(icmp4)
+            strcat(filter, "icmp or ");
+        if(icmp6)
+            strcat(filter, "icmp6 or ");
+        if(igmp)
+            strcat(filter, "igmp or ");
+        if(mld)
+            strcat(filter, "mld or ");
+    }
+    else {
+        if(tcp) {
+            strcat(filter, "tcp or ");
+        }
+        if(udp) {
+            strcat(filter, "udp or ");
+        }
+        if(arp) {
+            strcat(filter, "arp or ");
+        }
+        if(icmp4) {
+            strcat(filter, "icmp or ");
+        }
+        if(icmp6) {
+            strcat(filter, "icmp6 or ");
+        }
+        if(igmp) {
+            strcat(filter, "igmp or ");
+        }
+        if(mld) {
+            strcat(filter, "mld or ");
+        }
+    }
+
+    // Remove the last " or " from the filter string
+    if (strlen(filter) > 4) {
+        filter[strlen(filter)-4] = '\0';
+    }
+
+    if(DEBUG) {
+        printf("filter contains: %s\n", filter);
+    }
+    return filter;
+}
+
+pcap_t* open_pcap_socket(char *device, const char* packet_filter){
     
     bpf_u_int32 mask;
     bpf_u_int32 net;
+    struct bpf_program pcap_filter;
 
     if (device == NULL) {
         fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
@@ -35,17 +102,18 @@ pcap_t* open_pcap_socket(char *device){
         mask = 0;
     }
     // Open network interface to capture packets
-    
+    //4th param is timeout, setting to 0 is no timeout set
     pcap_handle = pcap_open_live(device, BUFSIZ, 1, 1000, errbuf);
     if (pcap_handle == NULL) {
         fprintf(stderr, "Couldn't open device %s: %s\n", device, errbuf);
         return 1;
     }
+
+    if (pcap_compile(pcap_handle, &pcap_filter, (char *) packet_filter, 0, net) == -1) {
+        fprintf(stderr, "Couldn't parse filter %s: %s\n", "tcp", pcap_geterr(pcap_handle));
+        return 1;
+    }
 }
-
-
-
-
 
 void print_help( char *prog_name) {
     printf("Usage: %s [-i interface | --interface interface] {-p port [--tcp|-t] [--udp|-u]} [--arp] [--icmp4] [--icmp6] [--igmp] [--mld] {-n num}\n", prog_name);
@@ -75,8 +143,8 @@ int main(int argc, char *argv[]) {
     int igmp = 0;
     int mld = 0;
     int num = 0;
-
-
+    char* device;
+    char* packet_filter;
 
     static struct option long_options[] = {
         {"interface", required_argument, 0, 'i'},
@@ -91,8 +159,6 @@ int main(int argc, char *argv[]) {
         {"num", required_argument, 0, 'n'},
         {0, 0, 0, 0}
     };
-
-    char* device;
 
     int option_index = 0;
     int c;
@@ -134,7 +200,9 @@ int main(int argc, char *argv[]) {
                 exit(EXIT_FAILURE);
         }
     }
-    open_pcap_socket(interface);
+    packet_filter = filter(port, tcp, udp, arp, icmp4, icmp6, igmp, mld);
+    open_pcap_socket(interface, packet_filter);
+    
 
     // Do something with the parsed options
     printf("interface: %s\n", interface);
