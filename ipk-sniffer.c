@@ -207,41 +207,99 @@ void socket_sniffer(pcap_t* pcap_handle){
     }
 }
 
+void printPacketContent(const void *addr, int len)
+{
+    int i;
+    unsigned char buff[17];
+    unsigned char *pc = (unsigned char *)addr;
+
+    for (i = 0; i < len; i++)
+    {
+        if ((i % 16) == 0)
+        {
+            if (i != 0)
+                printf("  %s\n", buff);
+
+            printf("0x%04x ", i);
+        }
+        printf(" %02x", pc[i]);
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e))
+            buff[i % 16] = '.';
+        else
+            buff[i % 16] = pc[i];
+
+        if ((i % 16) == 15 || i == len - 1) {
+            buff[(i % 16) + 1] = '\0';
+            printf("  %s", buff);
+        }
+    }
+}
+
+
 pcap_handler parse_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
  
 // Extract Ethernet header
+//same for udp tcp and arp
 const struct ether_header *eth_hdr;
 eth_hdr = (struct ether_header *) packet;
 
 // Extract source and destination MAC addresses
+// same for udp tcp and arp
 char src_mac[18], dst_mac[18];
 sprintf(src_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_shost[0], eth_hdr->ether_shost[1], eth_hdr->ether_shost[2], eth_hdr->ether_shost[3], eth_hdr->ether_shost[4], eth_hdr->ether_shost[5]);
 sprintf(dst_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_dhost[0], eth_hdr->ether_dhost[1], eth_hdr->ether_dhost[2], eth_hdr->ether_dhost[3], eth_hdr->ether_dhost[4], eth_hdr->ether_dhost[5]);
-printf("src MAC: %s\n", src_mac);
-printf("dst MAC: %s\n", dst_mac);
 
-// Extract IP header
+char src_ip[INET_ADDRSTRLEN], dst_ip[INET_ADDRSTRLEN];
 const struct iphdr *ip_hdr;
 ip_hdr = (struct iphdr *) (packet + sizeof(struct ether_header));
-
-// Extract source and destination IP addresses
-char src_ip[INET_ADDRSTRLEN], dst_ip[INET_ADDRSTRLEN];
 inet_ntop(AF_INET, &(ip_hdr->saddr), src_ip, INET_ADDRSTRLEN);
 inet_ntop(AF_INET, &(ip_hdr->daddr), dst_ip, INET_ADDRSTRLEN);
-printf("src IP: %s\n", src_ip);
-printf("dst IP: %s\n", dst_ip);
+
 
 // Extract TCP header
 const struct tcphdr *tcp_hdr;
 tcp_hdr = (struct tcphdr *) (packet + sizeof(struct ether_header) + sizeof(struct iphdr));
 
-// Extract source and destination port numbers
 uint16_t src_port, dst_port;
-src_port = ntohs(tcp_hdr->source); //16 bits nthos
-dst_port = ntohs(tcp_hdr->dest);
-printf("src port: %d\n", src_port);
-printf("dst port: %d\n", dst_port);
-printf("\n\n");
+
+// Extract IP header for udp and tcp
+if(eth_hdr->ether_type == htons(ETHERTYPE_IP)){
+
+    const uint32_t len = header->len;
+    printf("src MAC: %s\n", src_mac);
+    printf("dst MAC: %s\n", dst_mac);
+    printf("frame length %d\n", header->len);
+    // Extract source and destination IP addresses
+    printf("src IP: %s\n", src_ip);
+    printf("dst IP: %s\n", dst_ip);
+
+    switch (ip_hdr->protocol)
+    {
+    case 6://TCP IV4
+        // Extract source and destination port numbers
+        src_port = ntohs(tcp_hdr->source); //16 bits nthos
+        dst_port = ntohs(tcp_hdr->dest);
+        printf("src port: %d\n", src_port);
+        printf("dst port: %d\n", dst_port);
+        printf("\n");
+        printPacketContent(packet, len);
+        printf("\n\n");
+        break;
+        
+    case 17: //UDP IPV4
+        // Extract source and destination port numbers
+        src_port = ntohs(tcp_hdr->source); //16 bits ntohs
+        dst_port = ntohs(tcp_hdr->dest);
+        printf("src port: %d\n", src_port);
+        printf("dst port: %d\n", dst_port);
+        printf("\n");
+        printPacketContent(packet, len);
+        printf("\n\n");
+        break;
+    default:
+        break;
+    }
+}
 /*
 
     // Check if packet is TCP or UDP
