@@ -127,6 +127,13 @@ dst port: 57621
 
 ![port.png](/port.png)
 
+### CTRL-C exit
+**what was tested**: exiting right with CTRL-C signal  
+**why it was tested**: To ensure functionality works as should   
+**what was the testing environment**: Both NixDevelop Virtual Machine and WSL2 terminal  
+<p style="text-align: center;">IPK-SNIFFER</p>  
+
+![signal.png](/signal.png)
 
 
 ## Bibliography
