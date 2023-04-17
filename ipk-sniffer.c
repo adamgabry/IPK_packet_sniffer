@@ -312,6 +312,7 @@ void printPacketContent(const void *addr, int length) {
  */
 pcap_handler parse_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
 
+    
     char timestamp[30]; // allocate space for timestamp string
     struct tm* tm_info;
     time_t ts_sec = header->ts.tv_sec;

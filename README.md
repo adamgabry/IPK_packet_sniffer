@@ -1,7 +1,7 @@
 # Packet Sniffer
 
 
-The packet sniffer is a command-line tool that allows you to capture network traffic and analyze it in real-time. This tool can be useful for network troubleshooting, security auditing, and network monitoring. In this documentation, we will describe the different options available with the packet sniffer.
+The packet sniffer is a command-line tool that allows you to capture network traffic and analyze it in real-time. This tool can be useful for network troubleshooting, security auditing, and network monitoring. In this documentation is the describtion of the different options available with the packet sniffer.
 
 ## Usage
 
@@ -71,7 +71,62 @@ dst port: 57621
 0x0050  e4 a5 ec 57 d9 0f  ...W..
 ```
 
-## Testing 
+## Testing  
+
+ ### TCP packets
+**command :** `./ipk-sniffer -i eth0 --tcp`  
+**what was tested**: TCP packet sniffing  
+**why it was tested**: To ensure functionality works as should  
+**how it was tested**: We activated sniffer, checked the captured TCP packet and found the same packet in Wireshark  
+**what was the testing environment**: Both NixDevelop Virtual Machine and WSL2 terminal  
+**what were the inputs, expected outputs, and actual outputs**: The outputs were the same as expected, as you can see on the pictures  
+<p style="text-align: center;">WIRESHARK</p>  
+
+![tcp-wire.png](/tcp-wire.png)
+<p style="text-align: center;">IPK-SNIFFER</p>  
+
+![tcp.png](/tcp.png)
+
+### UDP packets
+**command :** `./ipk-sniffer -i eth0 --udp`  
+**what was tested**: UDP packet sniffing  
+**why it was tested**: To ensure functionality works as should  
+**how it was tested**: We activated sniffer, checked the captured UDP packet and found the same packet in Wireshark  
+**what was the testing environment**: Both NixDevelop Virtual Machine and WSL2 terminal  
+**what were the inputs, expected outputs, and actual outputs**: The outputs were the same as expected, as you can see on the pictures  
+<p style="text-align: center;">WIRESHARK</p>  
+
+![wireshark-udp.png](/wireshark-udp.png)
+<p style="text-align: center;">IPK-SNIFFER</p>  
+
+![udp.png](/udp.png)
+
+### Number of packets
+**command :** `./ipk-sniffer -i eth0 --udp -n 2`  
+**what was tested**: sniffing **2** packets 
+**why it was tested**: To ensure functionality works as should  
+**how it was tested**: We activated sniffer, checked the captured TCP packet and found the same packet in Wireshark  
+**what was the testing environment**: Both NixDevelop Virtual Machine and WSL2 terminal  
+**what were the inputs, expected outputs, and actual outputs**: The outputs were the same as expected, as you can see on the pictures  
+<p style="text-align: center;">WIRESHARK</p>  
+
+![n=2-wire.png](/n=2-wire.png)
+<p style="text-align: center;">IPK-SNIFFER</p>  
+
+![n=2.png](/n=2.png)
+
+### Sniffing on given port
+**command :** `./ipk-sniffer -i eth0 -p 5761`  
+**what was tested**: sniffing packets on port **number 5761** 
+**why it was tested**: To ensure functionality works as should  
+**how it was tested**: We activated sniffer, checked the captured TCP packet and found the same packet in Wireshark  
+**what was the testing environment**: Both NixDevelop Virtual Machine and WSL2 terminal  
+**what were the inputs, expected outputs, and actual outputs**: The outputs were the same as expected
+
+<p style="text-align: center;">IPK-SNIFFER</p>  
+
+![port.png](/port.png)
+
 
 
 ## Bibliography
