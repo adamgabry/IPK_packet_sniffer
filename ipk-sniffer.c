@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <getopt.h>
 #include <signal.h>
-#include <time.h>
 #include <pcap.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -15,32 +14,27 @@
 #include <netinet/igmp.h>
 #include <netinet/ether.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
+#include <sys/time.h>
+#include <time.h>
 
 #define DEBUG 0
 
-void interrupt_handler(int signal) {
-    exit(0);
-}
-
+//variable used to handle packet capture (libpcap lib)
 pcap_t *pcap_handle;
 
-char errbuf[PCAP_ERRBUF_SIZE];
-int header_len;
-
-/*DEBUG FUNCTION*/
-pcap_handler print(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-    // Get the current time
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    time_t current_time = tv.tv_sec;
-    char timestamp[20];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
-    printf("%s.%06ld ", timestamp, tv.tv_usec);
-
-    // Process the packet data here
-    printf("Packet captured, size: %d\n", header->len);
-    return 0;
+//SIGINT signal or more known - user call this signal with CTRL-C
+void interrupt_handler(int signal) {
+    pcap_close(pcap_handle);
+    printf("\nSuccesfull signal exit\n");
+    exit(EXIT_SUCCESS);
 }
+//BUFSIZ is the maximum size of a packet,
+char errbuf[PCAP_ERRBUF_SIZE];
+
+//global header_len variable, passing through all fctions
+//better as global variable
+int header_len;
 
 
 void print_help( char *prog_name) {
@@ -59,6 +53,21 @@ void print_help( char *prog_name) {
     printf("  -n, --num num               Set the number of packets to capture before exiting\n");
 }
 
+/**
+ * @brief filter function to make filter based on the given params from user input
+ * @brief filter is compatible to work with pcap functions, mainly pcap_compile,
+ * @cite to set filter right for our: https://www.devdungeon.com/content/using-libpcap-c#filters
+ * 
+ * @param port 
+ * @param tcp 
+ * @param udp 
+ * @param arp 
+ * @param icmp4 
+ * @param icmp6 
+ * @param igmp 
+ * @param mld 
+ * @return char* 
+ */
 char* filter(int port, int tcp, int udp, int arp, int icmp4, int icmp6, int igmp, int mld) {
     char *filter = (char*) malloc(100); // allocate 100 bytes of memory
     strcpy(filter, "");
@@ -66,13 +75,13 @@ char* filter(int port, int tcp, int udp, int arp, int icmp4, int icmp6, int igmp
         char tmp[50] = "";
         if(tcp)
         {
-            sprintf(tmp, "tcp %d ", port);
+            sprintf(tmp, "(tcp port %d) or ", port);
             strcat(filter, tmp);
         }
         if(udp)
         {
-            memset(tmp, 0, sizeof(tmp));
-            sprintf(tmp, "udp %d ", port);
+            memset(tmp, 0, sizeof(tmp)); //setting tmp to zero after using it in tcp option
+            sprintf(tmp, "(udp port %d) or ", port);
             strcat(filter, tmp);
         }
         if(arp)
@@ -119,241 +128,269 @@ char* filter(int port, int tcp, int udp, int arp, int icmp4, int icmp6, int igmp
     return filter;
 }
 
-pcap_t* open_pcap_socket(char *device, const char* packet_filter){
-    
-    bpf_u_int32 mask;
-    bpf_u_int32 net;
+/**
+ * @brief scans for available devices and returns device
+ * 
+ * @param device 
+ * @return char* 
+ */
+char* available_device(char *device){
     pcap_if_t *devices;
-
-    struct bpf_program pcap_filter;
-
-    if (device == NULL) {
-        fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
-        exit(EXIT_FAILURE);
-    }
+    // Find all available network devices, or exit the program if an error occurs.
     if (pcap_findalldevs(&devices, errbuf) == -1) {
         fprintf(stderr, "Error finding devices: %s\n", errbuf);
         exit(EXIT_FAILURE);
     }
-    if(DEBUG){    
+    // if device is NULL, print all available devices
+    if (device == NULL) {
         printf("Available devices:\n");
         for (pcap_if_t *d = devices; d != NULL; d = d->next) {
             printf("%s\n", d->name);
         }
+        exit(EXIT_SUCCESS);
     }
-    device = devices->name;
-    printf("chosen device: %s\n", device);
+    //goes in a loop and if given device is in a list of available devices, sets flag to true
+    bool is_valid_device = false;
+    for (pcap_if_t *d = devices; d != NULL; d = d->next) {
+        if (strcmp(device, d->name) == 0){
+            is_valid_device = true;
+            break;
+        }
+    }
+    if(!is_valid_device){
+            printf("Not an available interface %s\n\n", device);
+            printf("Available interfaces:\n");
+            for (pcap_if_t *d = devices; d != NULL; d = d->next) {
+                printf("%s\n", d->name);
+            }
+        }
+    // If no device given is enabled, print out the names of all available network devices.
+    return device;
+}
 
-    // Open network interface to capture packets
-    //4th param is timeout, setting to 0 is no timeout set
+/**
+ * @brief This function opens a pcap socket on the specified network device and sets a packet filter on it.
+ * @brief The function returns the pcap handle if successful, or exits the program if it fails. 
+ * @param device 
+ * @param packet_filter 
+ * @return pcap_t* pcap_handle
+ */
+pcap_t* open_pcap_socket(char *device, const char* packet_filter){
+    
+    // Declare variables to store 
+    bpf_u_int32 mask;       //network mask 
+    bpf_u_int32 net;        //IP address
+    pcap_if_t *devices;     //available network devices.
 
+    // Declare a struct to hold packet filter.
+    struct bpf_program pcap_filter;
+
+    // If no specific device was provided, use the first available device.
+    device = available_device(device);
+
+    // Open a network interface to capture packets
+    // and the two 1s indicate that we want to start capturing immediately and to capture in promiscuous mode.
     pcap_handle = pcap_open_live(device, BUFSIZ, 1, 1, errbuf);
     if (pcap_handle == NULL) {
-        fprintf(stderr, "Couldn't open device %s: %s\n", device, errbuf);
+        fprintf(stderr, "err:  Couldn't open device %s: %s\n", device, errbuf);
         exit(EXIT_FAILURE);   
     }
 
+    // Get the network mask and IP address of the selected device.
     if (pcap_lookupnet(device, &net, &mask, errbuf) == -1) {
         fprintf(stderr, "Couldn't get netmask for device %s: %s\n", device, errbuf);
         exit(EXIT_FAILURE);   
     }
     
+    // Compile the packet filter using the provided filter expression and the network mask.
     if (pcap_compile(pcap_handle, &pcap_filter, (char *) packet_filter, 0, net) == -1) {
         fprintf(stderr, "Error compiling filter: %s\n", pcap_geterr(pcap_handle));
         exit(EXIT_FAILURE);
     }
 
+    // Apply the compiled packet filter to the network interface.
     if (pcap_setfilter(pcap_handle, &pcap_filter) < 0) {
         fprintf(stderr, "Error capturing packets: %s\n", pcap_geterr(pcap_handle));
         exit(EXIT_FAILURE);
     }
+
+    // Return the pcap handle variable.
     return pcap_handle;
 }
 
-void socket_sniffer(pcap_t* pcap_handle){
+/**
+ * @brief Get the data layer object
+ * 
+ * @param pcap_handle 
+ */
+void get_data_layer(pcap_t* pcap_handle){
 
     //datalink layer
     int data_layer_type;
 
     data_layer_type = pcap_datalink(pcap_handle);
+
+    // check if getting datalink layer type was successful
     if (data_layer_type < 0){
         fprintf(stderr, "pcap_datalink() error \n");
         exit(0);
     }
-    //datalink layer header size
+    //datalink layer header size based on the datalink layer type
     switch (data_layer_type){
         case DLT_NULL:
             header_len = 4;
             break;
 
         case DLT_EN10MB:
-            
             header_len = 14;
             break;
+
         case DLT_SLIP:
+        
         case DLT_PPP:
-            
             header_len = 24;
             break;
 
         case DLT_LINUX_SLL:
-            
             header_len = 16;
             break;
 
         default:
+            // unsupported datalink layer type
             fprintf(stderr, "Unsupported header (%d)\n", data_layer_type);
             return;
     }
 }
-
-void printPacketContent(const void *addr, int len)
-{
+//sources for inspiration on this function:
+// https://stackoverflow.com/questions/5177879/display-the-contents-of-the-packet-in-c
+// https://www.opensourceforu.com/2011/02/capturing-packets-c-program-libpcap/
+/**
+ * @brief prints packet content
+ * 
+ * @param addr 
+ * @param length 
+ */
+void printPacketContent(const void *addr, int length) {
     int i;
-    unsigned char buff[17];
-    unsigned char *pc = (unsigned char *)addr;
+    unsigned char buff[17]; // buffer to store ASCII representation of packet content
+    unsigned char *pc = (unsigned char *)addr; // cast void pointer to unsigned char pointer
 
-    for (i = 0; i < len; i++)
-    {
-        if ((i % 16) == 0)
-        {
+    for (i = 0; i < length; i++) {
+        if ((i % 16) == 0) {
+            // print previous line's ASCII representation before starting a new line
             if (i != 0)
                 printf("  %s\n", buff);
 
-            printf("0x%04x ", i);
+            // print current line's offset in hexadecimal
+            printf("0x%04x: ", i);
         }
+        // print current byte's hexadecimal representation
         printf(" %02x", pc[i]);
-        if ((pc[i] < 0x20) || (pc[i] > 0x7e))
-            buff[i % 16] = '.';
-        else
-            buff[i % 16] = pc[i];
-
-        if ((i % 16) == 15 || i == len - 1) {
-            buff[(i % 16) + 1] = '\0';
+        // add current byte's ASCII representation to buffer
+        //if char is nonprintable:
+        if ((pc[i] < 0x20) || (pc[i] > 0x7e)) { 
+            buff[i % 16] = '.'; // use '.' for non-printable characters
+        }
+        else {
+            buff[i % 16] = pc[i]; // use the printable character itself for printable characters
+        }
+        // print the ASCII representation of the current line
+        if ((i % 16) == 15 || i == length - 1) {
+            buff[(i % 16) + 1] = '\0'; // terminate the buffer with null
             printf("  %s", buff);
         }
     }
 }
 
-
+/**
+ * @brief function for printing right packet info
+ * 
+ * @param args 
+ * @param header 
+ * @param packet 
+ * @return 0 
+ */
 pcap_handler parse_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
- 
-// Extract Ethernet header
-//same for udp tcp and arp
-const struct ether_header *eth_hdr;
-eth_hdr = (struct ether_header *) packet;
 
-// Extract source and destination MAC addresses
-// same for udp tcp and arp
-char src_mac[18], dst_mac[18];
-sprintf(src_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_shost[0], eth_hdr->ether_shost[1], eth_hdr->ether_shost[2], eth_hdr->ether_shost[3], eth_hdr->ether_shost[4], eth_hdr->ether_shost[5]);
-sprintf(dst_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_dhost[0], eth_hdr->ether_dhost[1], eth_hdr->ether_dhost[2], eth_hdr->ether_dhost[3], eth_hdr->ether_dhost[4], eth_hdr->ether_dhost[5]);
+    char timestamp[30]; // allocate space for timestamp string
+    struct tm* tm_info;
+    time_t ts_sec = header->ts.tv_sec;
+    int ts_usec = header->ts.tv_usec;
+    tm_info = localtime(&ts_sec);
+    strftime(timestamp, 30, "%Y-%m-%dT%H:%M:%S", tm_info);
+    //3 digits for microseconds
+    sprintf(timestamp + strlen(timestamp), ".%03d", ts_usec/1000);
+    strftime(timestamp + strlen(timestamp), 30 - strlen(timestamp), "%z", tm_info);
 
-char src_ip[INET_ADDRSTRLEN], dst_ip[INET_ADDRSTRLEN];
-const struct iphdr *ip_hdr;
-ip_hdr = (struct iphdr *) (packet + sizeof(struct ether_header));
-inet_ntop(AF_INET, &(ip_hdr->saddr), src_ip, INET_ADDRSTRLEN);
-inet_ntop(AF_INET, &(ip_hdr->daddr), dst_ip, INET_ADDRSTRLEN);
+    // Extract Ethernet header
+    // Same for UDP, TCP, and ARP
+    const struct ether_header *eth_hdr;
+    eth_hdr = (struct ether_header *) packet;
 
+    // Extract source and destination MAC addresses
+    // Same for UDP, TCP, and ARP
+    char src_mac[18], dst_mac[18];
+    sprintf(src_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_shost[0], eth_hdr->ether_shost[1], eth_hdr->ether_shost[2], eth_hdr->ether_shost[3], eth_hdr->ether_shost[4], eth_hdr->ether_shost[5]);
+    sprintf(dst_mac, "%02x:%02x:%02x:%02x:%02x:%02x", eth_hdr->ether_dhost[0], eth_hdr->ether_dhost[1], eth_hdr->ether_dhost[2], eth_hdr->ether_dhost[3], eth_hdr->ether_dhost[4], eth_hdr->ether_dhost[5]);
 
-// Extract TCP header
-const struct tcphdr *tcp_hdr;
-tcp_hdr = (struct tcphdr *) (packet + sizeof(struct ether_header) + sizeof(struct iphdr));
+    //inspiration: https://stackoverflow.com/questions/3060950/how-to-get-ip-address-from-sock-structure-in-c
+    char src_ip[INET_ADDRSTRLEN];
+    char dst_ip[INET_ADDRSTRLEN];
 
-uint16_t src_port, dst_port;
+    // Extract IP header
+    const struct iphdr *ip_hdr;
+    ip_hdr = (struct iphdr *) (packet + sizeof(struct ether_header));
+    inet_ntop(AF_INET, &(ip_hdr->saddr), src_ip, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &(ip_hdr->daddr), dst_ip, INET_ADDRSTRLEN);
 
-// Extract IP header for udp and tcp
-if(eth_hdr->ether_type == htons(ETHERTYPE_IP)){
+    // Extract TCP header
+    //how to correctly set tcp_hdr: https://cboard.cprogramming.com/c-programming/67961-get-tcp-source-port.html
+    const struct tcphdr *tcp_hdr;
+    tcp_hdr = (struct tcphdr *) (packet + sizeof(struct ether_header) + sizeof(struct iphdr));
 
-    const uint32_t len = header->len;
-    printf("src MAC: %s\n", src_mac);
-    printf("dst MAC: %s\n", dst_mac);
-    printf("frame length %d\n", header->len);
-    // Extract source and destination IP addresses
-    printf("src IP: %s\n", src_ip);
-    printf("dst IP: %s\n", dst_ip);
+    // Extract source and destination ports
+    uint16_t src_port, dst_port;
 
-    switch (ip_hdr->protocol)
-    {
-    case 6://TCP IV4
-        // Extract source and destination port numbers
-        src_port = ntohs(tcp_hdr->source); //16 bits nthos
-        dst_port = ntohs(tcp_hdr->dest);
-        printf("src port: %d\n", src_port);
-        printf("dst port: %d\n", dst_port);
-        printf("\n");
-        printPacketContent(packet, len);
-        printf("\n\n");
-        break;
+    // Extract IP header for udp and tcp
+    if(eth_hdr->ether_type == htons(ETHERTYPE_IP)){
+
+        const uint32_t len = header->len;
+        printf("Timestamp: %s\n", timestamp);
+        printf("src MAC: %s\n", src_mac);
+        printf("dst MAC: %s\n", dst_mac);
+        printf("frame length: %d\n", header->len);
+        // Extract source and destination IP addresses
+        printf("src IP: %s\n", src_ip);
+        printf("dst IP: %s\n", dst_ip);
         
-    case 17: //UDP IPV4
-        // Extract source and destination port numbers
-        src_port = ntohs(tcp_hdr->source); //16 bits ntohs
-        dst_port = ntohs(tcp_hdr->dest);
-        printf("src port: %d\n", src_port);
-        printf("dst port: %d\n", dst_port);
-        printf("\n");
-        printPacketContent(packet, len);
-        printf("\n\n");
-        break;
-    default:
-        break;
-    }
-}
-/*
-
-    // Check if packet is TCP or UDP
-    int is_tcp = (ip6hdr->protocol == IPPROTO_TCP);
-    int is_udp = (ip6hdr->protocol == IPPROTO_UDP);
-
-    // Check if packet should be filtered by port number
-    int filter_by_port = port_num > 0;
-
-    // Filter packet by port number if necessary
-    int src_port = -1, dst_port = -1;
-    if (filter_by_port && (is_tcp || is_udp)) {
-        tcp_hdr = (struct tcphdr *) (packet + sizeof(struct ether_header) + sizeof(struct iphdr));
-        udp_hdr = (struct udphdr *) (packet + sizeof(struct ether_header) + sizeof(struct iphdr));
-        src_port = is_tcp ? ntohs(tcp_hdr->source) : ntohs(udp_hdr->source);
-        dst_port = is_tcp ? ntohs(tcp_hdr->dest) : ntohs(udp_hdr->dest);
-        if (src_port != port_num && dst_port != port_num) {
-            return;
+        // numbers of ports available here: https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
+        switch (ip_hdr->protocol)
+        {
+        case 6://TCP IV4
+            // Extract source and destination port numbers
+            src_port = ntohs(tcp_hdr->source); //16 bits nthos
+            dst_port = ntohs(tcp_hdr->dest);
+            printf("src port: %d\n", src_port);
+            printf("dst port: %d\n", dst_port);
+            printf("\n");
+            printPacketContent(packet, len);
+            printf("\n\n");
+            break;
+            
+        case 17: //UDP IPV4
+            // Extract source and destination port numbers
+            src_port = ntohs(tcp_hdr->source); //16 bits ntohs
+            dst_port = ntohs(tcp_hdr->dest);
+            printf("src port: %d\n", src_port);
+            printf("dst port: %d\n", dst_port);
+            printf("\n");
+            printPacketContent(packet, len);
+            printf("\n\n");
+            break;
+        default:
+            break;
         }
     }
-
-    // Filter packet by port number if necessary
-    if (tcp_hdr && udp_hdr && port_num) {
-        if (tcp_hdr->th_sport != port_num && tcp_hdr->th_dport != port_num && udp_hdr->uh_sport != port_num && udp_hdr->uh_dport != port_num) {
-            return;
-        }
-    } else if (tcp_hdr && port_num) {
-        if (tcp_hdr->th_sport != port_num && tcp_hdr->th_dport != port_num) {
-            return;
-        }
-    } else if (udp_hdr && port_num) {
-        if (udp_hdr->uh_sport != port_num && udp_hdr->uh_dport != port_num) {
-            return;
-        }
-    }
-
-    // Print packet information
-    printf("timestamp: %s", ctime((const time_t*)&header->ts.tv_sec));
-    printf("src MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", eth_hdr->ether_shost[0], eth_hdr->ether_shost[1], eth_hdr->ether_shost[2], eth_hdr->ether_shost[3], eth_hdr->ether_shost[4], eth_hdr->ether_shost[5]);
-    printf("dst MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", eth_hdr->ether_dhost[0], eth_hdr->ether_dhost[1], eth_hdr->ether_dhost[2], eth_hdr->ether_dhost[3], eth_hdr->ether_dhost[4], eth_hdr->ether_dhost[5]);
-    printf("frame length: %d bytes\n", header->len);
-
-    if (is_tcp) {
-        printf("src IP: %s\n", inet_ntoa(ip6hdr->saddr));
-        printf("dst IP: %s\n", inet_ntoa(ip6hdr->daddr));
-        printf("src port: %d\n", ntohs(tcp_hdr->th_sport));
-        printf("dst port: %d\n", ntohs(tcp_hdr->th_dport));
-    } else if (is_udp) {
-        printf("src IP: %s\n", inet_ntoa(ip6hdr->saddr));
-        printf("dst IP: %s\n", inet_ntoa(ip6hdr->daddr));
-        printf("src port: %d\n", ntohs(udp_hdr->uh_sport));
-        printf("dst port: %d\n", ntohs(udp_hdr->uh_dport));
-    }
-    */
     return 0;
 }
 
@@ -428,69 +465,42 @@ int main(int argc, char *argv[]) {
                 exit(EXIT_FAILURE);
         }
     }
+
+    //setting packet filter
     packet_filter = filter(port, tcp, udp, arp, icmp4, icmp6, igmp, mld);
+
+    //opening socket in given interface using packet_filter
     if (pcap_handle = open_pcap_socket(interface, packet_filter)) {
-        socket_sniffer(pcap_handle);
-                                                //    pcap handler print works!!!
-        int packets_captured = pcap_loop(pcap_handle, 0, (pcap_handler) parse_packet, NULL);
+        
+        get_data_layer(pcap_handle);
+
+        // loop num times and call parse_packet function
+        int packets_captured = pcap_loop(pcap_handle, num, (pcap_handler) parse_packet, NULL);
         if (packets_captured == -1) {
             fprintf(stderr, "Error capturing packets: %s\n", pcap_geterr(pcap_handle));
             exit(EXIT_FAILURE);
         }
-        printf("Captured %d packets\n", packets_captured);
-    // stats of packets
-        struct pcap_stat stats;
+        // close the pcap descriptor
+        pcap_close(pcap_handle);
+    }
 
-        // print the stats (if some exist)
+    if(DEBUG){
+        // statistics for packets
+        struct pcap_stat stats;
+        // print stats
         if (pcap_stats(pcap_handle, &stats) >= 0) {
             printf("%d packets received\n", stats.ps_recv);
             printf("%d packets dropped\n", stats.ps_drop);
         }
-
-        // close the pcap descriptor
-        pcap_close(pcap_handle);
-        printf("Captured %d packets\n", packets_captured);
+        printf("interface: %s\n", interface);
+        printf("port: %d\n", port);
+        printf("tcp: %d\n", tcp);
+        printf("udp: %d\n", udp);
+        printf("arp: %d\n", arp);
+        printf("icmp4: %d\n", icmp4);
+        printf("icmp6: %d\n", icmp6);
+        printf("igmp: %d\n", igmp);
+        printf("n: %d\n", num);
     }
-
-    // Do something with the parsed options
-    printf("interface: %s\n", interface);
-    printf("port: %d\n", port);
-    printf("tcp: %d\n", tcp);
-    printf("udp: %d\n", udp);
-    printf("arp: %d\n", arp);
-    printf("icmp4: %d\n", icmp4);
-    printf("icmp6: %d\n", icmp6);
-    printf("igmp: %d\n", igmp);
-    printf("n: %d\n", num);
-    
     return 0;
 }
-
-
-
-/*
-// Assume packet is a character array containing the packet data
-// and packet_length is the length of the packet in bytes
-pcap_handler parse_packet(const uint8_t *packet, size_t packet_length) {
-    printf("Packet too short.\n");
-    // Check packet length
-    if (packet_length < 4) {
-        printf("Packet too short.\n");
-        return;
-    }
-    // Extract header fields
-    uint16_t magic_number = (packet[0] << 8) | packet[1];
-    uint16_t version = (packet[2] << 8) | packet[3];
-
-    // Print header fields
-    printf("Magic number: 0x%04X\n", magic_number);
-    printf("Version: %u\n", version);
-
-    // Parse payload
-    size_t payload_offset = 4;
-    size_t payload_length = packet_length - payload_offset;
-
-    return NULL;
-    // TODO: Add code to parse the payload
-}
-*/
